@@ -1,0 +1,8 @@
+{
+  "name": "Workstation",
+  "description": "A clean, distraction-free text editor with customizable modular editing buttons for proofreading, flow, character splitting, and lore preservation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
