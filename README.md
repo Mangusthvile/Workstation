@@ -9,7 +9,19 @@ A desktop-style writing workstation that runs in the browser. Four draggable win
 
 Everything is saved in the browser automatically. **Ctrl+S** saves a full checkpoint, and the folder icon in the menu bar restores it or exports/imports a `.json` backup.
 
-## Running it
+## Desktop app (Windows)
+
+Download `Workstation.exe` from the [Releases page](../../releases) and double-click it. No install and no Node.js needed.
+
+- The first launch asks for a Gemini API key (only needed for AI editing; press Enter to skip). It is saved in `%LOCALAPPDATA%\Workstation\settings.env`, which you can edit with Notepad any time.
+- Workstation opens in its own window (Microsoft Edge or Chrome app mode, falling back to your default browser) at `http://localhost:3777`.
+- A small console window stays open while it runs and closes by itself when you close the Workstation window. Double-clicking again while it runs just opens another window.
+- Your work is saved in that window's own browser profile under `%LOCALAPPDATA%\Workstation`. To bring work over from the web version, use Save & Load > Download Backup there, then Upload & Load in the desktop app.
+- Windows may show "Windows protected your PC" the first time because the exe is not code-signed. Click **More info > Run anyway**.
+
+To build the exe yourself: install [Bun](https://bun.sh) (`npm i -g bun`), then run `npm run build:exe`. The result is `release/Workstation.exe`. Bun cross-compiles, so this works on Windows, macOS or Linux.
+
+## Running from source
 
 Requires Node 20 or newer.
 
@@ -25,13 +37,17 @@ npm run dev               # http://localhost:3000
 | `npm run build` | Production build into `dist/` |
 | `NODE_ENV=production npm start` | Serves `dist/` and the API (run `build` first) |
 | `npm test` | Unit tests for the editing engine, diff, sanitizer and World Clock rules |
+| `npm run build:exe` | Builds `release/Workstation.exe` (needs Bun) |
 | `npm run lint` | Type-check |
 
 ## Layout
 
 ```
-server.ts                    Express app: /api/edit (Gemini) and static hosting
+server.ts                    Web server: Vite in development, dist/ in production
+server/app.ts                The API (/api/edit, /api/health), shared by web and desktop
 server/editEngine.ts         Prompt building, section parsing, retry rules (pure, tested)
+desktop/launcher.ts          Entry point of Workstation.exe
+scripts/build-exe.mjs        Builds the exe (vite build, embed dist/, bun compile)
 src/
   components/
     Desktop.tsx              Menu bar, dock, window stacking, save/load
