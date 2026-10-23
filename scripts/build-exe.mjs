@@ -2,13 +2,17 @@
 /**
  * Builds the double-click desktop app: release/Workstation.exe
  *
- *   npm run build:exe                         Windows x64 (default)
- *   npm run build:exe -- --target=bun-linux-x64   any Bun target, e.g. for testing
+ *   npm run build:exe                              Windows x64 (default)
+ *   npm run build:exe -- --target=bun-linux-x64    any Bun target, e.g. for testing
  *
  * Steps: Vite production build -> embed every file in dist/ into a TypeScript
  * module -> compile desktop/launcher.ts plus that module into one executable
  * with Bun (https://bun.sh). Bun can cross-compile, so a Windows exe can be
  * built on any OS. Requires `bun` on your PATH (install: npm i -g bun).
+ *
+ * Icon: after compiling, Bun's default icon and version info are replaced with
+ * desktop/icon.ico and Workstation's details using resedit (pure JavaScript, so it
+ * works the same on every OS). Regenerate the icons with scripts/icon/make-icons.py.
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -19,6 +23,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name, fallback) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1] ?? fallback;
 const target = arg('target', 'bun-windows-x64');
 const isWindows = target.includes('windows');
+const version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version.replace(/[^0-9.]/g, '');
 const outfile = path.join(root, 'release', arg('outfile', isWindows ? 'Workstation.exe' : 'workstation'));
 
 const run = (cmd, args) => {
@@ -42,6 +47,7 @@ const TYPES = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -93,5 +99,92 @@ run(bun, [
   outfile,
 ]);
 
+if (isWindows) {
+  console.log('     Setting the exe icon and version info...');
+  await brandWindowsExe(outfile, path.join(root, 'desktop', 'icon.ico'), version);
+}
+
 const mb = (fs.statSync(outfile).size / 1024 / 1024).toFixed(1);
 console.log(`\nDone: ${path.relative(root, outfile)} (${mb} MB)`);
+
+/**
+ * Replaces the exe's icon (all sizes) and version strings.
+ *
+ * Bun stores the app in a ".bun" section placed after the resource section, so
+ * regular resource editors either refuse the file or move sections around. The
+ * new resources are much smaller than Bun's originals, so this rewrites the
+ * resource section in place at the same size and address and leaves every other
+ * byte of the exe untouched.
+ */
+async function brandWindowsExe(exePath, icoPath, appVersion) {
+  const { NtExecutable, Resource, Data } = await import('resedit');
+  const { NtExecutableResource } = await import('pe-library');
+  const RT_ICON = 3;
+  const RT_GROUP_ICON = 14;
+  const LANG_EN_US = 1033;
+  const RESOURCE_DIR = 2;
+
+  const buf = fs.readFileSync(exePath);
+  const exe = NtExecutable.from(buf, { ignoreCert: true });
+  const section = exe.getSectionByEntry(RESOURCE_DIR);
+  if (!section) throw new Error('No resource section found');
+
+  // NtExecutableResource.from() rejects this section layout, so parse the section directly.
+  const res = Reflect.construct(NtExecutableResource, []);
+  res.sectionDataHeader = { ...section.info };
+  res.parse(section, false);
+
+  // Drop Bun's icon completely so Windows cannot pick it over ours.
+  res.entries = res.entries.filter((e) => e.type !== RT_ICON && e.type !== RT_GROUP_ICON);
+  const ico = Data.IconFile.from(fs.readFileSync(icoPath));
+  Resource.IconGroupEntry.replaceIconsForResource(res.entries, 1, LANG_EN_US, ico.icons.map((i) => i.data));
+
+  const [major, minor = 0, patch = 0] = appVersion.split('.').map(Number);
+  const info = Resource.VersionInfo.fromEntries(res.entries)[0] ?? Resource.VersionInfo.createEmpty();
+  info.setFileVersion(major, minor, patch, 0, LANG_EN_US);
+  info.setProductVersion(major, minor, patch, 0, LANG_EN_US);
+  const languages = info.getAllLanguagesForStringValues();
+  for (const lang of languages.length ? languages : [{ lang: LANG_EN_US, codepage: 1200 }]) {
+    info.setStringValues(lang, {
+      ProductName: 'Workstation',
+      FileDescription: 'Workstation',
+      InternalName: 'Workstation',
+      OriginalFilename: 'Workstation.exe',
+      CompanyName: 'Workstation',
+      FileVersion: `${major}.${minor}.${patch}`,
+      ProductVersion: `${major}.${minor}.${patch}`,
+      LegalCopyright: 'Built with Bun (https://bun.com, MIT license)',
+    });
+  }
+  info.outputToResourceEntries(res.entries);
+
+  // noGrow: fail rather than overflow; no shrink: output is exactly the original section size.
+  const { bin, rawSize } = res.generateResourceData(section.info.virtualAddress, exe.getFileAlignment(), true, false);
+  const out = Buffer.from(buf);
+  const newData = Buffer.from(bin);
+  if (newData.length > section.info.sizeOfRawData) throw new Error('New resources do not fit');
+  newData.copy(out, section.info.pointerToRawData);
+
+  // Point the resource directory at the new data size and refresh the PE checksum.
+  const peOffset = out.readUInt32LE(0x3c);
+  const optional = peOffset + 24;
+  const is64 = out.readUInt16LE(optional) === 0x20b;
+  const dirs = optional + (is64 ? 112 : 96);
+  out.writeUInt32LE(rawSize, dirs + RESOURCE_DIR * 8 + 4);
+  const checksumAt = optional + 64;
+  out.writeUInt32LE(peChecksum(out, checksumAt), checksumAt);
+
+  fs.writeFileSync(exePath, out);
+}
+
+/** Standard PE image checksum (what Windows' CheckSumMappedFile computes). */
+function peChecksum(buf, checksumAt) {
+  let sum = 0;
+  for (let i = 0; i < buf.length; i += 2) {
+    if (i === checksumAt || i === checksumAt + 2) continue;
+    sum += i + 1 < buf.length ? buf[i] | (buf[i + 1] << 8) : buf[i];
+    sum = (sum & 0xffff) + (sum >>> 16);
+  }
+  sum = (sum & 0xffff) + (sum >>> 16);
+  return (sum + buf.length) >>> 0;
+}

@@ -246,7 +246,7 @@ export const Desktop: React.FC = () => {
       <header className="absolute top-0 left-0 right-0 h-8 bg-white/40 backdrop-blur-2xl border-b border-black/5 z-40 flex items-center justify-between px-3.5 text-xs text-neutral-800 shadow-2xs">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 font-bold">
-            <span className="text-sm">{''}</span>
+            <img src="/logo-mark.svg" alt="" className="w-4 h-4" draggable={false} />
             <span className="font-semibold text-neutral-900 tracking-tight">Workstation</span>
           </div>
 
