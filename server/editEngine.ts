@@ -178,11 +178,3 @@ export const countWords = (text: string) => {
   const trimmed = text.trim();
   return trimmed ? trimmed.split(/\s+/).length : 0;
 };
-
-/** True for errors worth retrying after a short pause (rate limits, overload). */
-export function isTransientError(err: unknown): boolean {
-  const status = (err as { status?: unknown })?.status;
-  if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) return true;
-  const msg = String((err as Error)?.message ?? err);
-  return /\b(429|503)\b|RESOURCE_EXHAUSTED|UNAVAILABLE|quota|busy|overloaded|rate limit/i.test(msg);
-}

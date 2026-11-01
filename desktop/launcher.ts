@@ -20,6 +20,7 @@ import type { Server } from 'http';
 import { spawn } from 'child_process';
 import dotenv from 'dotenv';
 import { createApp } from '../server/app';
+import { DEFAULT_MODELS } from '../server/gemini';
 
 export interface EmbeddedFile {
   type: string;
@@ -52,14 +53,16 @@ function dataDir(): string {
 
 const settingsFile = () => path.join(dataDir(), 'settings.env');
 
-function readApiKey(): string | undefined {
-  if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
+function readSetting(name: string): string | undefined {
+  if (process.env[name]) return process.env[name];
   try {
-    return dotenv.parse(fs.readFileSync(settingsFile())).GEMINI_API_KEY || undefined;
+    return dotenv.parse(fs.readFileSync(settingsFile()))[name] || undefined;
   } catch {
     return undefined;
   }
 }
+
+const readApiKey = () => readSetting('GEMINI_API_KEY');
 
 function writeSettings(apiKey: string) {
   fs.mkdirSync(dataDir(), { recursive: true });
@@ -69,6 +72,10 @@ function writeSettings(apiKey: string) {
       '# Workstation settings. You can edit this file with Notepad; changes apply right away.',
       `# Get a free Gemini API key at ${KEY_URL}`,
       `GEMINI_API_KEY=${apiKey}`,
+      '',
+      '# Optional: the Gemini models to try, in order, separated by commas.',
+      `# When one runs out of free quota for the day, the next one is used.`,
+      `# GEMINI_MODELS=${DEFAULT_MODELS.join(',')}`,
       '',
     ].join('\r\n')
   );
@@ -272,6 +279,7 @@ export async function runDesktop(files: EmbeddedFiles) {
   app.use(
     createApp({
       getApiKey: readApiKey,
+      getModels: () => readSetting('GEMINI_MODELS'),
       missingKeyMessage: `No Gemini API key is set. Open ${settingsFile()} in Notepad, put your key after GEMINI_API_KEY= and save, then try again.`,
     })
   );

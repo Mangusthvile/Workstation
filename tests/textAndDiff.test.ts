@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { needsSanitizing, removeEmDashes } from '../src/textSanitizer';
 import { computeSimpleDiff } from '../src/diffUtil';
-import { buildPromptInstructions, isTransientError, parseSections } from '../server/editEngine';
+import { buildPromptInstructions, parseSections } from '../server/editEngine';
 import { DEFAULT_CONFIG } from '../src/types';
 
 test('em dashes and their stand-ins become plain hyphens', () => {
@@ -72,10 +72,4 @@ test('a rule group with every sub-option off adds nothing to the prompt', () => 
   const { instructions, ruleNames } = buildPromptInstructions(config);
   assert.ok(!ruleNames.includes('Lore & Character Rules'));
   assert.ok(instructions.every((i) => i.trim().length > 0));
-});
-
-test('rate limits and overloads are retried; other errors are not', () => {
-  assert.equal(isTransientError({ status: 429 }), true);
-  assert.equal(isTransientError(new Error('RESOURCE_EXHAUSTED: quota')), true);
-  assert.equal(isTransientError({ status: 400, message: 'API key not valid' }), false);
 });

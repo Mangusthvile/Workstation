@@ -12,75 +12,24 @@ import {
   buildSystemInstruction,
   buildUserPrompt,
   countWords,
-  isTransientError,
   parseSections,
   type PartialEditConfig,
 } from './editEngine';
-
-// gemini-3.1-flash-lite has generous quotas and low latency for text tasks; fall back if it is busy.
-const MODELS = ['gemini-3.1-flash-lite', 'gemini-flash-latest'];
-const RETRY_DELAY_MS = 1000;
+import { GeminiRouter, GeminiUnavailableError, parseModelList } from './gemini';
 
 export interface AppOptions {
   /** Where to read the Gemini key from. Read per request so edits take effect without a restart. */
   getApiKey?: () => string | undefined;
+  /** Optional comma-separated model list (GEMINI_MODELS). Read per request. */
+  getModels?: () => string | undefined;
   /** Error shown in the editor when no key is configured. */
   missingKeyMessage?: string;
 }
 
-const sleep = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener('abort', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-
-/** Tries each model, retrying once on rate-limit/overload errors. */
-async function generateWithFallback(ai: GoogleGenAI, prompt: string, systemInstruction: string, signal: AbortSignal) {
-  let lastError: unknown = null;
-  for (const model of MODELS) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      if (signal.aborted) throw new Error('Request cancelled');
-      try {
-        const response = await ai.models.generateContent({
-          model,
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          config: { systemInstruction, temperature: 0.3, abortSignal: signal },
-        });
-        const text = response.text;
-        if (text) return { text, model };
-        lastError = new Error('The AI engine returned an empty response.');
-        break; // empty (e.g. blocked) responses will not improve on retry; try the next model
-      } catch (err) {
-        lastError = err;
-        if (attempt === 1 && isTransientError(err)) {
-          await sleep(RETRY_DELAY_MS, signal);
-          continue;
-        }
-        break;
-      }
-    }
-  }
-  throw lastError ?? new Error('The AI engine could not complete the revision.');
-}
-
-/** Gemini errors often carry a JSON body as their message; pull out the human-readable part. */
-function readableError(error: unknown): string {
-  const raw = (error as Error)?.message || String(error || '') || 'An error occurred while revising the text.';
-  try {
-    const parsed = JSON.parse(raw.slice(raw.indexOf('{')));
-    const inner = parsed?.error?.message;
-    if (typeof inner === 'string' && inner) return `Gemini: ${inner}`;
-  } catch {
-    /* not JSON */
-  }
-  return raw;
-}
-
 export function createApp(options: AppOptions = {}): express.Express {
   const getApiKey = options.getApiKey ?? (() => process.env.GEMINI_API_KEY);
+  const getModels = options.getModels ?? (() => process.env.GEMINI_MODELS);
+  const router = new GeminiRouter();
   const missingKeyMessage = options.missingKeyMessage ?? 'GEMINI_API_KEY is not configured on the server.';
 
   // Created on first use and re-created if the key changes (hosts like AI Studio
@@ -93,6 +42,7 @@ export function createApp(options: AppOptions = {}): express.Express {
     if (!client || key !== clientKey) {
       client = new GoogleGenAI({ apiKey: key, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
       clientKey = key;
+      router.reset(); // quotas belong to the key's project
     }
     return client;
   };
@@ -137,8 +87,9 @@ export function createApp(options: AppOptions = {}): express.Express {
     });
 
     try {
-      const { text: rawResult, model } = await generateWithFallback(
+      const { text: rawResult, model } = await router.generate(
         ai,
+        parseModelList(getModels()),
         buildUserPrompt(text),
         buildSystemInstruction(instructions),
         controller.signal
@@ -166,12 +117,16 @@ export function createApp(options: AppOptions = {}): express.Express {
       res.json(body);
     } catch (error) {
       if (controller.signal.aborted) return;
-      const detail = readableError(error);
-      console.error('Error generating revision:', detail);
-      const status = isTransientError(error) ? 503 : 500;
-      const message =
-        status === 503 ? 'The AI service is busy or over quota right now. Please try again in a moment.' : detail;
-      res.status(status).json({ error: message });
+      if (error instanceof GeminiUnavailableError) {
+        console.error(`Edit failed: ${error.message}`);
+        res.status(error.httpStatus).json({
+          error: error.message,
+          resetAt: error.resetAt ? new Date(error.resetAt).toISOString() : undefined,
+        });
+        return;
+      }
+      console.error('Error generating revision:', error);
+      res.status(500).json({ error: (error as Error)?.message || 'An error occurred while revising the text.' });
     }
   });
 

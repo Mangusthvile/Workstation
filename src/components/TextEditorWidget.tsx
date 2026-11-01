@@ -78,7 +78,13 @@ export const TextEditorWidget = memo(function TextEditorWidget({
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Server returned error (${res.status})`);
+        let message: string = errorData.error || `Server returned error (${res.status})`;
+        // Daily quota messages name Pacific midnight; also say when that is for this user.
+        if (errorData.resetAt && /midnight Pacific/.test(message)) {
+          const local = new Date(errorData.resetAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+          message += ` (That's ${local} your time.)`;
+        }
+        throw new Error(message);
       }
 
       const data: EditResponse = await res.json();
@@ -95,7 +101,13 @@ export const TextEditorWidget = memo(function TextEditorWidget({
     } catch (err) {
       if (controller.signal.aborted) return;
       console.error(err);
-      setError(err instanceof Error ? err.message : 'Failed to edit text. Please try again.');
+      const message = err instanceof Error ? err.message : 'Failed to edit text. Please try again.';
+      // The browser's own wording for "could not reach the server at all".
+      setError(
+        /failed to fetch|networkerror|load failed/i.test(message)
+          ? "Couldn't reach Workstation's server. If you use the desktop app, its black console window must stay open: double-click Workstation.exe to start it again."
+          : message
+      );
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
       if (!controller.signal.aborted) setIsLoading(false);

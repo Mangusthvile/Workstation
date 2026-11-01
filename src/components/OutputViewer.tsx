@@ -79,6 +79,11 @@ export const OutputViewer = memo(function OutputViewer({ originalText, response,
           <span className="text-xs text-neutral-400 font-mono">
             ({response.stats.resultWordCount} words • {response.stats.resultCharCount} chars)
           </span>
+          {response.model && (
+            <span className="text-[10px] text-neutral-400 font-mono" title="Gemini model that produced this revision">
+              via {response.model}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1 bg-neutral-100/90 p-1 rounded-xl text-xs font-medium text-neutral-600" role="tablist">
